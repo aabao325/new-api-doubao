@@ -1013,26 +1013,21 @@ func mapToolChoice(toolChoice any, parallelToolCalls *bool) *dto.ClaudeToolChoic
 	return claudeToolChoice
 }
 
-// SanitizeClaudeRequestThinkingBlocks 过滤 ClaudeRequest 中所有消息内容里无效的 thinking 块。
+// SanitizeClaudeRequestThinkingBlocks 清除 ClaudeRequest 所有消息内容中的 thinking/redacted_thinking 块。
 //
-// 策略（来自 Anthropic 官方建议）：
-//   - 历史 assistant 消息（非最后一条）：完全清除所有 thinking/redacted_thinking 块。
-//     历史消息里的 signature 容易损坏，保留会触发 500: Invalid 'signature' in 'thinking' block。
-//   - 最后一条 assistant 消息：保留 thinking 块（tool use 场景需要），
-//     但过滤掉 thinking 和 signature 都为空的彻底损坏的块。
+// 背景：Claude API 对 thinking 块有严格要求——thinking 块需要同时有非空的 thinking 字段和
+// 有效的 signature 字段，redacted_thinking 块需要有非空的 data 字段。任何不满足条件的块
+// 都会触发 500 错误（"each thinking block must contain thinking" 或
+// "Invalid 'signature' in 'thinking' block"）。
+//
+// 由于代理层无法保证 signature 的完整性（流式传输中 signature 可能在 message_stop 之前就被
+// 截断保存，导致后续请求携带不完整的 signature），最安全的做法是直接清除所有 thinking 块。
+// 这与 Anthropic 官方建议一致。
 //
 // 不处理非 assistant 角色消息，它们不会包含 thinking 块。
 func SanitizeClaudeRequestThinkingBlocks(request *dto.ClaudeRequest) {
 	if request == nil {
 		return
-	}
-
-	// 找到最后一条 assistant 消息的索引
-	lastAssistantIdx := -1
-	for i, message := range request.Messages {
-		if message.Role == "assistant" {
-			lastAssistantIdx = i
-		}
 	}
 
 	for i, message := range request.Messages {
@@ -1051,26 +1046,9 @@ func SanitizeClaudeRequestThinkingBlocks(request *dto.ClaudeRequest) {
 		removedCount := 0
 
 		for _, block := range content {
-			if block.Type != "thinking" && block.Type != "redacted_thinking" {
-				filtered = append(filtered, block)
-				continue
-			}
-
-			if i != lastAssistantIdx {
-				// 历史 assistant 消息：清除所有 thinking/redacted_thinking 块
-				// 避免损坏的 signature 触发 500
-				removedCount++
-				continue
-			}
-
-			// 最后一条 assistant 消息：过滤掉 thinking 和 signature 都为空的损坏块
-			thinkingText := ""
-			if block.Thinking != nil {
-				thinkingText = *block.Thinking
-			}
-			if block.Type == "thinking" &&
-				strings.TrimSpace(thinkingText) == "" &&
-				strings.TrimSpace(block.Signature) == "" {
+			if block.Type == "thinking" || block.Type == "redacted_thinking" {
+				// 直接清除所有 thinking/redacted_thinking 块
+				// 代理层无法保证 signature 完整性，传入损坏的块会触发 500 错误
 				removedCount++
 				continue
 			}
@@ -1078,7 +1056,7 @@ func SanitizeClaudeRequestThinkingBlocks(request *dto.ClaudeRequest) {
 		}
 
 		if removedCount > 0 {
-			common.SysLog(fmt.Sprintf("filtered %d invalid thinking block(s) from %s message[%d]", removedCount, message.Role, i))
+			common.SysLog(fmt.Sprintf("filtered %d thinking block(s) from %s message[%d]", removedCount, message.Role, i))
 			request.Messages[i].SetContent(filtered)
 		}
 	}

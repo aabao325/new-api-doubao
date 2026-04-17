@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/relay/channel/claude"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
@@ -102,6 +103,18 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 		info.UpstreamModelName = request.Model
 	}
+
+	// claude-opus-4-7 及以上版本不接受任何非默认的 temperature/top_p/top_k，
+	// 无论是否经过 thinking 适配，都需要清除这些参数
+	// 否则会返回 400: temperature is deprecated for this model
+	if strings.HasPrefix(request.Model, "claude-opus-4-7") {
+		request.Temperature = nil
+		request.TopP = nil
+		request.TopK = nil
+	}
+
+	// 清除所有消息中无效的 thinking 块，防止 signature 损坏触发 500
+	claude.SanitizeClaudeRequestThinkingBlocks(request)
 
 	if info.ChannelSetting.SystemPrompt != "" {
 		if request.System == nil {
