@@ -69,6 +69,8 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			request.TopK = nil
 		} else {
 			request.Temperature = common.GetPointer[float64](1.0)
+			// claude-opus-4-6 不允许同时指定 temperature 和 top_p，忽略 top_p
+			request.TopP = nil
 		}
 		info.UpstreamModelName = request.Model
 	} else if model_setting.GetClaudeSettings().ThinkingAdapterEnabled &&
@@ -111,6 +113,12 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		request.Temperature = nil
 		request.TopP = nil
 		request.TopK = nil
+	}
+
+	// claude-*-4-6 系列（如 claude-opus-4-6、claude-sonnet-4-6）不允许同时指定 temperature 和 top_p，
+	// 若用户同时传递了两者，忽略 top_p，保留 temperature
+	if strings.Contains(request.Model, "-4-6") && request.Temperature != nil && request.TopP != nil {
+		request.TopP = nil
 	}
 
 	// 清除所有消息中无效的 thinking 块，防止 signature 损坏触发 500
