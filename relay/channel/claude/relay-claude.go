@@ -431,6 +431,11 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 
 	claudeRequest.Prompt = ""
 	claudeRequest.Messages = claudeMessages
+
+	// claude-opus-4-7 及以上版本不接受非默认的 temperature/top_p/top_k，
+	// 传入任何非默认值都会返回 400: temperature is deprecated for this model
+	sanitizeOpus47Params(&claudeRequest)
+
 	return &claudeRequest, nil
 }
 
@@ -1006,4 +1011,91 @@ func mapToolChoice(toolChoice any, parallelToolCalls *bool) *dto.ClaudeToolChoic
 	}
 
 	return claudeToolChoice
+}
+
+// SanitizeClaudeRequestThinkingBlocks 过滤 ClaudeRequest 中所有消息内容里无效的 thinking 块。
+//
+// 策略（来自 Anthropic 官方建议）：
+//   - 历史 assistant 消息（非最后一条）：完全清除所有 thinking/redacted_thinking 块。
+//     历史消息里的 signature 容易损坏，保留会触发 500: Invalid 'signature' in 'thinking' block。
+//   - 最后一条 assistant 消息：保留 thinking 块（tool use 场景需要），
+//     但过滤掉 thinking 和 signature 都为空的彻底损坏的块。
+//
+// 不处理非 assistant 角色消息，它们不会包含 thinking 块。
+func SanitizeClaudeRequestThinkingBlocks(request *dto.ClaudeRequest) {
+	if request == nil {
+		return
+	}
+
+	// 找到最后一条 assistant 消息的索引
+	lastAssistantIdx := -1
+	for i, message := range request.Messages {
+		if message.Role == "assistant" {
+			lastAssistantIdx = i
+		}
+	}
+
+	for i, message := range request.Messages {
+		if message.Role != "assistant" {
+			continue
+		}
+		if message.IsStringContent() {
+			continue
+		}
+		content, err := message.ParseContent()
+		if err != nil || len(content) == 0 {
+			continue
+		}
+
+		filtered := make([]dto.ClaudeMediaMessage, 0, len(content))
+		removedCount := 0
+
+		for _, block := range content {
+			if block.Type != "thinking" && block.Type != "redacted_thinking" {
+				filtered = append(filtered, block)
+				continue
+			}
+
+			if i != lastAssistantIdx {
+				// 历史 assistant 消息：清除所有 thinking/redacted_thinking 块
+				// 避免损坏的 signature 触发 500
+				removedCount++
+				continue
+			}
+
+			// 最后一条 assistant 消息：过滤掉 thinking 和 signature 都为空的损坏块
+			thinkingText := ""
+			if block.Thinking != nil {
+				thinkingText = *block.Thinking
+			}
+			if block.Type == "thinking" &&
+				strings.TrimSpace(thinkingText) == "" &&
+				strings.TrimSpace(block.Signature) == "" {
+				removedCount++
+				continue
+			}
+			filtered = append(filtered, block)
+		}
+
+		if removedCount > 0 {
+			common.SysLog(fmt.Sprintf("filtered %d invalid thinking block(s) from %s message[%d]", removedCount, message.Role, i))
+			request.Messages[i].SetContent(filtered)
+		}
+	}
+}
+
+// sanitizeOpus47Params 清除 claude-opus-4-7 及以上版本不支持的参数。
+// 从 Opus 4.7 开始，设置任何非默认的 temperature/top_p/top_k 都会返回
+// 400: temperature is deprecated for this model。
+// Anthropic 官方建议完全省略这些参数，改用 prompt 来引导模型行为。
+func sanitizeOpus47Params(request *dto.ClaudeRequest) {
+	if request == nil {
+		return
+	}
+	// 匹配 claude-opus-4-7 及其变体（如 claude-opus-4-7-20250514 等）
+	if strings.HasPrefix(request.Model, "claude-opus-4-7") {
+		request.Temperature = nil
+		request.TopP = nil
+		request.TopK = nil
+	}
 }

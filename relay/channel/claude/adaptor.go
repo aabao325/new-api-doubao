@@ -25,6 +25,13 @@ func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dt
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
+	// 过滤消息历史中无效的 thinking 块，避免上游返回
+	// 500: each thinking block must contain thinking
+	// 500: Invalid 'signature' in 'thinking' block
+	SanitizeClaudeRequestThinkingBlocks(request)
+	// 清除 claude-opus-4-7 不支持的参数，避免上游返回
+	// 400: temperature is deprecated for this model
+	sanitizeOpus47Params(request)
 	return request, nil
 }
 
