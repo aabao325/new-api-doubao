@@ -425,10 +425,11 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 }
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
-	// gpt-image-2 模型参数处理
+	// gpt-image-2 模型参数过滤
 	if request.Model == "gpt-image-2" {
-		// response_format 不支持，需要移除（客户端可能传入，但上游不支持）
-		request.ResponseFormat = ""
+		// 不支持的参数需要移除
+		request.ResponseFormat = ""  // 不支持 response_format
+		request.Style = nil           // 不支持 style
 		// output_format 和 quality 官方支持，保留原样
 	}
 

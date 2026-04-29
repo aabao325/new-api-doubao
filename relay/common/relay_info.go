@@ -869,6 +869,17 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 		}
 	}
 
+	// 处理自定义过滤参数列表
+	if len(channelOtherSettings.FilteredParams) > 0 {
+		for _, param := range channelOtherSettings.FilteredParams {
+			if param != "" {
+				if _, exists := data[param]; exists {
+					delete(data, param)
+				}
+			}
+		}
+	}
+
 	jsonDataAfter, err := common.Marshal(data)
 	if err != nil {
 		common.SysError("RemoveDisabledFields Marshal error :" + err.Error())
